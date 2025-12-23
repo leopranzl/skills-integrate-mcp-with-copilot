@@ -1,14 +1,20 @@
 """
 High School Management System API
 
-A super simple FastAPI application that allows students to view and sign up
-for extracurricular activities at Mergington High School.
+A simple FastAPI application for viewing extracurricular activities.
+
+Admin Mode: only teachers (logged in) may register/unregister students.
+Teacher credentials are stored in a local JSON file.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 import os
+import json
+import jwt
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
@@ -18,6 +24,38 @@ app = FastAPI(title="Mergington High School API",
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+# --- Admin Mode / Teacher Auth ---
+
+TEACHERS_FILE = Path(__file__).parent / "teachers.json"
+JWT_SECRET = os.environ.get("ADMIN_JWT_SECRET", "dev-secret-change-me")
+JWT_ALG = "HS256"
+
+def _load_teachers():
+    try:
+        with open(TEACHERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return {t["username"]: t["password"] for t in data.get("teachers", [])}
+    except FileNotFoundError:
+        return {}
+
+TEACHERS = _load_teachers()
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+def _require_teacher(authorization: str | None):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization")
+    token = authorization.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if payload.get("role") != "teacher":
+        raise HTTPException(status_code=403, detail="Forbidden: teacher role required")
+    return payload
 
 # In-memory activity database
 activities = {
@@ -88,9 +126,20 @@ def get_activities():
     return activities
 
 
+@app.post("/login")
+def teacher_login(req: LoginRequest):
+    pwd = TEACHERS.get(req.username)
+    if not pwd or pwd != req.password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    exp = datetime.now(timezone.utc) + timedelta(hours=12)
+    token = jwt.encode({"sub": req.username, "role": "teacher", "exp": exp}, JWT_SECRET, algorithm=JWT_ALG)
+    return {"token": token, "role": "teacher", "username": req.username}
+
+
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(activity_name: str, email: str, authorization: str | None = Header(None)):
     """Sign up a student for an activity"""
+    _require_teacher(authorization)
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -111,8 +160,9 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(activity_name: str, email: str, authorization: str | None = Header(None)):
     """Unregister a student from an activity"""
+    _require_teacher(authorization)
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
