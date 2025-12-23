@@ -23,6 +23,29 @@ header {
   color: white;
   border-radius: 5px;
 }
+/* User/login area */
+#user-area {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+}
+#user-area form {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+#login-status {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.admin-only.hidden,
+#login-form.hidden,
+#message.hidden {
+  display: none;
+}
 
 header h1 {
   margin-bottom: 10px;
